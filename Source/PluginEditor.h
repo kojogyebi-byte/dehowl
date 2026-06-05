@@ -88,7 +88,8 @@ private:
 };
 
 //==============================================================================
-class DeHowlEditor : public juce::AudioProcessorEditor
+class DeHowlEditor : public juce::AudioProcessorEditor,
+                     private juce::Timer
 {
 public:
     explicit DeHowlEditor (DeHowlProcessor&);
@@ -98,14 +99,21 @@ public:
     void resized() override;
 
 private:
+    void timerCallback() override;
+
     DeHowlProcessor& proc;
     DeHowlLookAndFeel lnf;
 
     juce::Slider sens, maxN, depth, q, out;
     juce::Label  lSens, lMaxN, lDepth, lQ, lOut;
     juce::ComboBox  mode;
+    juce::TextButton bypassBtn  { "Bypass" };
     juce::TextButton clearBtn   { "Clear Notches" };
     juce::TextButton devicesBtn { "Audio Devices" };
+    juce::TextButton aiBtn      { "AI Clear Voice" };
+    juce::TextButton roomBtn    { "Room Learn EQ" };
+    juce::TextButton resetBtn   { "Reset Learning" };
+    juce::Label statusLabel;
     NotchPanel panel;
     LevelMeter inMeter, outMeter;
     std::unique_ptr<juce::AudioDeviceSelectorComponent> deviceSelector;  // standalone only
@@ -116,8 +124,10 @@ private:
 
     using SliderAttachment   = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ComboBoxAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
+    using ButtonAttachment   = juce::AudioProcessorValueTreeState::ButtonAttachment;
     std::unique_ptr<SliderAttachment>   aSens, aMaxN, aDepth, aQ, aOut;
     std::unique_ptr<ComboBoxAttachment> aMode;
+    std::unique_ptr<ButtonAttachment>   aBypass, aAi, aRoom;
 
     void setupRotary (juce::Slider&, juce::Label&, const juce::String& name);
 

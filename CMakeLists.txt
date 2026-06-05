@@ -13,6 +13,25 @@ FetchContent_Declare(JUCE
     GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(JUCE)
 
+# RNNoise: a small recurrent neural network for noise suppression (Xiph.org).
+# The trained model weights are embedded in the source — fully offline.
+FetchContent_Declare(rnnoise
+    GIT_REPOSITORY https://github.com/xiph/rnnoise.git
+    GIT_TAG v0.1.1
+    GIT_SHALLOW TRUE
+    SOURCE_SUBDIR cmake_unused_subdir)   # repo has no CMakeLists; just download it
+FetchContent_MakeAvailable(rnnoise)
+
+add_library(rnnoise STATIC
+    ${rnnoise_SOURCE_DIR}/src/denoise.c
+    ${rnnoise_SOURCE_DIR}/src/rnn.c
+    ${rnnoise_SOURCE_DIR}/src/rnn_data.c
+    ${rnnoise_SOURCE_DIR}/src/pitch.c
+    ${rnnoise_SOURCE_DIR}/src/kiss_fft.c
+    ${rnnoise_SOURCE_DIR}/src/celt_lpc.c)
+target_include_directories(rnnoise PUBLIC ${rnnoise_SOURCE_DIR}/include)
+set_target_properties(rnnoise PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 juce_add_plugin(DeHowl
     COMPANY_NAME "Shamaapps"
     COMPANY_WEBSITE "https://shamaapps.com"
@@ -47,6 +66,7 @@ target_link_libraries(DeHowl
     PRIVATE
         juce::juce_audio_utils
         juce::juce_dsp
+        rnnoise
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags)

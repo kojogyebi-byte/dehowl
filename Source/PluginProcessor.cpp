@@ -1,6 +1,41 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
+extern "C"
+{
+ #include <rnnoise.h>
+}
+
+//==============================================================================
+DeHowlProcessor::~DeHowlProcessor()
+{
+    destroyRnStates();
+}
+
+void DeHowlProcessor::createRnStates()
+{
+    destroyRnStates();
+    for (auto& c : rn)
+    {
+        c.state = rnnoise_create (nullptr);   // nullptr = built-in trained model
+        c.pending.fill (0.0f);
+        c.done.fill (0.0f);
+        c.pos = 0;
+    }
+}
+
+void DeHowlProcessor::destroyRnStates()
+{
+    for (auto& c : rn)
+    {
+        if (c.state != nullptr)
+        {
+            rnnoise_destroy (c.state);
+            c.state = nullptr;
+        }
+    }
+}
+
 //==============================================================================
 DeHowlProcessor::DeHowlProcessor()
     : AudioProcessor (BusesProperties()
@@ -14,9 +49,14 @@ DeHowlProcessor::DeHowlProcessor()
     pQ           = apvts.getRawParameterValue ("q");
     pMode        = apvts.getRawParameterValue ("mode");
     pOutput      = apvts.getRawParameterValue ("output");
+    pBypass      = apvts.getRawParameterValue ("bypass");
+    pAiClear     = apvts.getRawParameterValue ("aiClear");
+    pRoomLearn   = apvts.getRawParameterValue ("roomLearn");
 
     magDb.resize ((size_t) fftSize / 2 + 1, -120.0f);
     prefixSum.resize ((size_t) fftSize / 2 + 2, 0.0f);
+    roomAvgDb.resize ((size_t) fftSize / 2 + 1, -120.0f);
+    roomPrefix.resize ((size_t) fftSize / 2 + 2, 0.0f);
     candidates.reserve (64);
 }
 
@@ -47,6 +87,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout DeHowlProcessor::createLayou
         juce::ParameterID { "output", 1 }, "Output (dB)",
         juce::NormalisableRange<float> (-12.0f, 12.0f, 0.1f), 0.0f));
 
+    p.push_back (std::make_unique<juce::AudioParameterBool> (
+        juce::ParameterID { "bypass", 1 }, "Bypass", false));
+
+    p.push_back (std::make_unique<juce::AudioParameterBool> (
+        juce::ParameterID { "aiClear", 1 }, "AI Clear Voice", false));
+
+    p.push_back (std::make_unique<juce::AudioParameterBool> (
+        juce::ParameterID { "roomLearn", 1 }, "Room Learning EQ", true));
+
     return { p.begin(), p.end() };
 }
 
@@ -61,7 +110,29 @@ void DeHowlProcessor::prepareToPlay (double sampleRate, int)
     hopCount = 0;
     candidates.clear();
     clearAllNotches();
+
+    // AI denoise: the RNNoise network is trained for 48 kHz audio
+    rnSampleRateOk = std::abs (sr - 48000.0) < 1.0;
+    createRnStates();
+
+    resetLearning();
     publishDisplay();
+}
+
+void DeHowlProcessor::resetLearning()
+{
+    std::fill (roomAvgDb.begin(), roomAvgDb.end(), -120.0f);
+    roomFrames = 0;
+    roomAssignCounter = 0;
+    for (auto& t : tones)
+    {
+        t.active = false;
+        t.freqHz = 0.0f;
+        t.targetDepth = t.currentDepth = 0.0f;
+        t.filt[0].reset();
+        t.filt[1].reset();
+    }
+    roomCuts.store (0);
 }
 
 bool DeHowlProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -82,6 +153,8 @@ void DeHowlProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         clearAllNotches();
         publishDisplay();
     }
+    if (resetLearnRequest.exchange (false))
+        resetLearning();
 
     const int numIn  = getTotalNumInputChannels();
     const int numOut = getTotalNumOutputChannels();
@@ -96,6 +169,14 @@ void DeHowlProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         inMag = juce::jmax (inMag, buffer.getMagnitude (1, 0, numSamples));
     if (inMag > inPeak.load())
         inPeak.store (inMag);
+
+    // ---- bypass: pass audio through untouched ----
+    if (pBypass->load() > 0.5f)
+    {
+        if (inMag > outPeak.load())
+            outPeak.store (inMag);
+        return;
+    }
 
     // ---- feed the analyser with a mono mix ----
     // (channel pointers hoisted out of the sample loop — no per-sample calls)
@@ -137,6 +218,64 @@ void DeHowlProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         }
     }
 
+    // ---- learned room-EQ cuts (gentle, wide; fixes hollow/boxy resonances) ----
+    if (pRoomLearn->load() > 0.5f)
+    {
+        for (auto& t : tones)
+        {
+            if (! t.active || t.currentDepth < 0.2f)
+                continue;
+
+            for (int ch = 0; ch < filtChannels; ++ch)
+            {
+                float* d = buffer.getWritePointer (ch);
+                auto&  f = t.filt[ch];
+                for (int s = 0; s < numSamples; ++s)
+                    d[s] = f.processSample (d[s]);
+            }
+        }
+    }
+
+    // ---- AI Clear Voice: RNNoise neural network (offline, embedded model) ----
+    if (pAiClear->load() > 0.5f)
+    {
+        if (rnSampleRateOk && rn[0].state != nullptr)
+        {
+            aiStatus.store (1);
+            for (int ch = 0; ch < filtChannels; ++ch)
+            {
+                auto&  c = rn[ch];
+                float* d = buffer.getWritePointer (ch);
+
+                for (int s = 0; s < numSamples; ++s)
+                {
+                    const float wet = c.done[(size_t) c.pos];
+                    c.pending[(size_t) c.pos] = d[s];
+                    d[s] = wet;
+
+                    if (++c.pos >= kRnFrame)
+                    {
+                        c.pos = 0;
+                        float fin [kRnFrame], fout [kRnFrame];
+                        for (int i = 0; i < kRnFrame; ++i)
+                            fin[i] = c.pending[(size_t) i] * 32768.0f;
+                        rnnoise_process_frame (c.state, fout, fin);
+                        for (int i = 0; i < kRnFrame; ++i)
+                            c.done[(size_t) i] = fout[i] * (1.0f / 32768.0f);
+                    }
+                }
+            }
+        }
+        else
+        {
+            aiStatus.store (2);   // needs 48000 Hz — passing through unprocessed
+        }
+    }
+    else
+    {
+        aiStatus.store (0);
+    }
+
     buffer.applyGain (juce::Decibels::decibelsToGain (pOutput->load()));
 
     const float mag = buffer.getMagnitude (0, numSamples);
@@ -161,6 +300,7 @@ void DeHowlProcessor::analyse()
             else ++it;
         }
         updateNotches();      // auto-release keeps working during silence
+        updateTones();
         publishDisplay();
         return;
     }
@@ -220,7 +360,166 @@ void DeHowlProcessor::analyse()
 
     promoteCandidates();
     updateNotches();
+    if (pRoomLearn->load() > 0.5f)
+        updateRoomLearning();
+    updateTones();
     publishDisplay();
+}
+
+//==============================================================================
+// Learn the room's long-term spectral fingerprint and place up to 6 gentle,
+// wide cuts on persistent resonances (hollowness, boxiness, reflection build-up).
+void DeHowlProcessor::updateRoomLearning()
+{
+    const int numBins = fftSize / 2;
+
+    // slow exponential average: the "memory" of how this room sounds
+    const float a = 0.01f;   // ~4-5 seconds of memory per frame at 43 ms hops
+    for (int b = 1; b < numBins; ++b)
+        roomAvgDb[(size_t) b] += a * (magDb[(size_t) b] - roomAvgDb[(size_t) b]);
+
+    ++roomFrames;
+    if (roomFrames < 120)        // ~5 s warm-up before drawing any conclusions
+        return;
+    if (++roomAssignCounter < 23)   // re-evaluate the cuts ~once per second
+        return;
+    roomAssignCounter = 0;
+
+    // broad spectral envelope of the learned average (prefix sums again)
+    roomPrefix[0] = roomPrefix[1] = 0.0f;
+    for (int b = 1; b < numBins; ++b)
+        roomPrefix[(size_t) b + 1] = roomPrefix[(size_t) b] + roomAvgDb[(size_t) b];
+
+    const int binLo = juce::jmax (2, (int) std::ceil  (120.0   * fftSize / sr));
+    const int binHi = juce::jmin (numBins - 2,
+                                  (int) std::floor (juce::jmin (8000.0, sr * 0.4) * fftSize / sr));
+
+    struct Ridge { float freq = 0, excess = 0; };
+    Ridge picked[kMaxTones];
+    int   numPicked = 0;
+
+    for (int b = binLo; b <= binHi; ++b)
+    {
+        const float v = roomAvgDb[(size_t) b];
+        if (v < -55.0f)
+            continue;
+        if (! (v > roomAvgDb[(size_t) (b - 1)] && v >= roomAvgDb[(size_t) (b + 1)]))
+            continue;
+
+        const int lo  = juce::jmax (1, b - 64);
+        const int hi  = juce::jmin (numBins - 1, b + 64);
+        const int elo = juce::jmax (lo, b - 8);
+        const int ehi = juce::jmin (hi, b + 8);
+        const float sum = (roomPrefix[(size_t) hi + 1] - roomPrefix[(size_t) lo])
+                        - (roomPrefix[(size_t) ehi + 1] - roomPrefix[(size_t) elo]);
+        const int   cnt = (hi - lo + 1) - (ehi - elo + 1);
+        const float excess = v - sum / (float) cnt;
+
+        if (excess < 4.0f)
+            continue;
+
+        const float freq = (float) b * (float) (sr / (double) fftSize);
+
+        // keep the strongest ridges, at least 1/4 octave apart
+        bool merged = false;
+        for (int i = 0; i < numPicked; ++i)
+        {
+            if (std::abs (std::log2 (freq / picked[i].freq)) < 0.25f)
+            {
+                if (excess > picked[i].excess)
+                    picked[i] = { freq, excess };
+                merged = true;
+                break;
+            }
+        }
+        if (! merged)
+        {
+            if (numPicked < kMaxTones)
+            {
+                picked[numPicked++] = { freq, excess };
+            }
+            else
+            {
+                int weakest = 0;
+                for (int i = 1; i < kMaxTones; ++i)
+                    if (picked[i].excess < picked[weakest].excess)
+                        weakest = i;
+                if (excess > picked[weakest].excess)
+                    picked[weakest] = { freq, excess };
+            }
+        }
+    }
+
+    // match ridges to existing tone slots; fade out anything no longer needed
+    bool slotUsed[kMaxTones] = {};
+    for (int i = 0; i < numPicked; ++i)
+    {
+        const float depth = juce::jlimit (0.0f, 6.0f, picked[i].excess - 3.0f);
+
+        int found = -1;
+        for (int t = 0; t < kMaxTones; ++t)
+            if (tones[(size_t) t].active && ! slotUsed[t]
+                 && std::abs (std::log2 (picked[i].freq / tones[(size_t) t].freqHz)) < 0.33f)
+            { found = t; break; }
+
+        if (found < 0)
+            for (int t = 0; t < kMaxTones; ++t)
+                if (! tones[(size_t) t].active && ! slotUsed[t])
+                { found = t; break; }
+
+        if (found < 0)
+            continue;
+
+        auto& t = tones[(size_t) found];
+        slotUsed[found] = true;
+        if (! t.active)
+        {
+            t.freqHz = picked[i].freq;
+            t.currentDepth = 0.0f;
+            t.filt[0].reset();
+            t.filt[1].reset();
+            t.active = true;
+        }
+        t.targetDepth = depth;
+    }
+
+    for (int t = 0; t < kMaxTones; ++t)
+        if (tones[(size_t) t].active && ! slotUsed[t])
+            tones[(size_t) t].targetDepth = 0.0f;   // fades away in updateTones()
+}
+
+void DeHowlProcessor::updateTones()
+{
+    int activeCount = 0;
+    const bool enabled = pRoomLearn->load() > 0.5f;
+
+    for (auto& t : tones)
+    {
+        if (! t.active)
+            continue;
+
+        const float target = enabled ? t.targetDepth : 0.0f;
+        const float diff   = target - t.currentDepth;
+        const float step   = juce::jlimit (-0.25f, 0.25f, diff);   // very gentle moves
+
+        if (std::abs (step) > 0.02f)
+        {
+            t.currentDepth += step;
+            t.filt[0].setPeak (sr, (double) t.freqHz, 4.0, (double) -t.currentDepth);
+            t.filt[1].setPeak (sr, (double) t.freqHz, 4.0, (double) -t.currentDepth);
+        }
+
+        if (target <= 0.01f && t.currentDepth < 0.2f)
+        {
+            t.active = false;
+            t.currentDepth = t.targetDepth = 0.0f;
+            t.filt[0].reset();
+            t.filt[1].reset();
+            continue;
+        }
+        ++activeCount;
+    }
+    roomCuts.store (activeCount);
 }
 
 void DeHowlProcessor::registerCandidate (int bin, float levelDb)

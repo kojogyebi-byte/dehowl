@@ -7,6 +7,8 @@
 #include <vector>
 #include <cmath>
 
+struct DenoiseState;   // RNNoise neural network state (defined in rnnoise.h)
+
 //==============================================================================
 // A simple, real-time-safe biquad (RBJ peaking EQ used as a variable-depth notch)
 struct Biquad
@@ -60,7 +62,7 @@ public:
     static constexpr int kMaxNotches = 12;
 
     DeHowlProcessor();
-    ~DeHowlProcessor() override = default;
+    ~DeHowlProcessor() override;
 
     //==============================================================================
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
@@ -93,6 +95,11 @@ public:
     //==============================================================================
     // Called from the editor ("Clear Notches" button) — real-time safe
     void requestClearNotches() noexcept { clearRequest.store (true); }
+    void requestResetLearning() noexcept { resetLearnRequest.store (true); }
+
+    // Status for the GUI: 0 = AI off, 1 = AI active, 2 = AI needs 48000 Hz
+    std::atomic<int> aiStatus  { 0 };
+    std::atomic<int> roomCuts  { 0 };   // how many learned room-EQ cuts are active
 
     // Lock-free snapshot of the notch bank, read by the editor at ~10 Hz
     std::array<std::atomic<float>, kMaxNotches> displayFreq  {};
@@ -146,7 +153,43 @@ private:
 
     double sr = 48000.0;
     int    holdFrames = 200;          // ~8 s before auto-release starts
-    std::atomic<bool> clearRequest { false };
+    std::atomic<bool> clearRequest      { false };
+    std::atomic<bool> resetLearnRequest { false };
+
+    //==============================================================================
+    // AI noise/clutter reduction (RNNoise neural network, 48 kHz, 480-sample frames)
+    static constexpr int kRnFrame = 480;
+    struct RnChannel
+    {
+        DenoiseState* state = nullptr;
+        std::array<float, (size_t) kRnFrame> pending {};   // dry samples being collected
+        std::array<float, (size_t) kRnFrame> done {};      // last processed frame
+        int pos = 0;
+    };
+    RnChannel rn[2];
+    bool rnSampleRateOk = false;      // network is trained for 48 kHz only
+    void createRnStates();
+    void destroyRnStates();
+
+    //==============================================================================
+    // Room learning: long-term average spectrum -> gentle corrective EQ
+    // (targets persistent resonances: "hollow"/boxy room modes & reflections)
+    static constexpr int kMaxTones = 6;
+    struct Tone
+    {
+        float  freqHz = 0.0f;
+        float  targetDepth = 0.0f, currentDepth = 0.0f;   // dB of gentle cut
+        bool   active = false;
+        Biquad filt[2];
+    };
+    std::array<Tone, kMaxTones> tones;
+    std::vector<float> roomAvgDb;     // EMA spectrum of the room
+    std::vector<float> roomPrefix;    // prefix sums for envelope estimation
+    int roomFrames = 0;
+    int roomAssignCounter = 0;
+    void updateRoomLearning();        // learn + (re)assign corrective cuts
+    void updateTones();               // ramp depths, refresh coefficients
+    void resetLearning();
 
     // Cached raw parameter pointers
     std::atomic<float>* pSensitivity = nullptr;
@@ -155,6 +198,9 @@ private:
     std::atomic<float>* pQ           = nullptr;
     std::atomic<float>* pMode        = nullptr;   // 0 = Latch, 1 = Auto Release
     std::atomic<float>* pOutput      = nullptr;
+    std::atomic<float>* pBypass      = nullptr;
+    std::atomic<float>* pAiClear     = nullptr;
+    std::atomic<float>* pRoomLearn   = nullptr;
 
     //==============================================================================
     void analyse();
