@@ -90,6 +90,13 @@ void DeHowlProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     for (int ch = numIn; ch < numOut; ++ch)
         buffer.clear (ch, 0, numSamples);
 
+    // ---- input meter ----
+    float inMag = buffer.getMagnitude (0, 0, numSamples);
+    if (numIn > 1)
+        inMag = juce::jmax (inMag, buffer.getMagnitude (1, 0, numSamples));
+    if (inMag > inPeak.load())
+        inPeak.store (inMag);
+
     // ---- feed the analyser with a mono mix ----
     // (channel pointers hoisted out of the sample loop — no per-sample calls)
     const float* in0 = buffer.getReadPointer (0);

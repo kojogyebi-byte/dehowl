@@ -98,7 +98,8 @@ public:
     std::array<std::atomic<float>, kMaxNotches> displayFreq  {};
     std::array<std::atomic<float>, kMaxNotches> displayDepth {};
 
-    // Output peak level for the GUI meter (max-accumulated, editor resets it)
+    // Peak levels for the GUI meters (max-accumulated, editor resets them)
+    std::atomic<float> inPeak  { 0.0f };
     std::atomic<float> outPeak { 0.0f };
 
     juce::AudioProcessorValueTreeState apvts;

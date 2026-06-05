@@ -14,12 +14,14 @@ public:
 };
 
 //==============================================================================
-// Output level meter (horizontal)
+// Big labeled level meter (horizontal) with dB read-out
 class LevelMeter : public juce::Component,
                    private juce::Timer
 {
 public:
-    explicit LevelMeter (DeHowlProcessor& p) : proc (p) { startTimerHz (24); }
+    LevelMeter (std::atomic<float>& source, const juce::String& labelText)
+        : src (source), label (labelText) { startTimerHz (24); }
+
     void paint (juce::Graphics&) override;
 
 private:
@@ -28,7 +30,7 @@ private:
         if (! isShowing())                 // window hidden/minimised: do nothing
             return;
 
-        const float peak = proc.outPeak.exchange (0.0f);
+        const float peak = src.exchange (0.0f);
         const float next = juce::jmax (peak, level * 0.86f);
 
         if (std::abs (next - level) > 1.0e-4f)   // repaint only on visible change
@@ -42,7 +44,8 @@ private:
         }
     }
 
-    DeHowlProcessor& proc;
+    std::atomic<float>& src;
+    juce::String label;
     float level = 0.0f;
 };
 
@@ -104,8 +107,9 @@ private:
     juce::TextButton clearBtn   { "Clear Notches" };
     juce::TextButton devicesBtn { "Audio Devices" };
     NotchPanel panel;
-    LevelMeter meter;
-    std::unique_ptr<juce::Component> deviceSelector;   // created on first use (standalone only)
+    LevelMeter inMeter, outMeter;
+    std::unique_ptr<juce::AudioDeviceSelectorComponent> deviceSelector;  // standalone only
+    juce::Viewport deviceView;                 // scrollable, so every option is reachable
     bool showingDevices = false;
 
     void toggleDevicePanel();
