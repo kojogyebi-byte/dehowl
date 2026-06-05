@@ -1,0 +1,33 @@
+name: Build DeHowl macOS app
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: >
+          cmake -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+
+      - name: "Build (universal - Apple Silicon + Intel)"
+        run: cmake --build build --config Release -j3
+
+      - name: Sign the app (ad-hoc)
+        run: codesign --force --deep -s - "build/DeHowl_artefacts/Release/Standalone/DeHowl.app"
+
+      - name: Package the app
+        run: ditto -c -k --keepParent "build/DeHowl_artefacts/Release/Standalone/DeHowl.app" DeHowl-macOS.zip
+
+      - name: Upload the finished app
+        uses: actions/upload-artifact@v4
+        with:
+          name: DeHowl-macOS
+          path: DeHowl-macOS.zip
