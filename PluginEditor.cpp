@@ -195,6 +195,24 @@ DeHowlEditor::DeHowlEditor (DeHowlProcessor& p)
     bypassBtn.setColour (juce::TextButton::textColourOnId, juce::Colours::white);
     addAndMakeVisible (bypassBtn);
 
+    aiBtn.setClickingTogglesState (true);
+    aiBtn.setColour (juce::TextButton::buttonOnColourId, kGood.withAlpha (0.85f));
+    aiBtn.setColour (juce::TextButton::textColourOnId, juce::Colours::black);
+    addAndMakeVisible (aiBtn);
+
+    roomBtn.setClickingTogglesState (true);
+    roomBtn.setColour (juce::TextButton::buttonOnColourId, kGood.withAlpha (0.85f));
+    roomBtn.setColour (juce::TextButton::textColourOnId, juce::Colours::black);
+    addAndMakeVisible (roomBtn);
+
+    resetBtn.onClick = [this] { proc.requestResetLearning(); };
+    addAndMakeVisible (resetBtn);
+
+    statusLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
+    statusLabel.setColour (juce::Label::textColourId, kTextDim);
+    addAndMakeVisible (statusLabel);
+    startTimerHz (4);
+
    #if JucePlugin_Build_Standalone
     // CRITICAL: JUCE standalone apps mute the audio input by default
     // "to avoid feedback loops". For a feedback suppressor that protection
@@ -226,8 +244,26 @@ DeHowlEditor::DeHowlEditor (DeHowlProcessor& p)
     aOut   = std::make_unique<SliderAttachment>   (proc.apvts, "output",      out);
     aMode  = std::make_unique<ComboBoxAttachment> (proc.apvts, "mode",        mode);
     aBypass = std::make_unique<ButtonAttachment>  (proc.apvts, "bypass",      bypassBtn);
+    aAi     = std::make_unique<ButtonAttachment>  (proc.apvts, "aiClear",     aiBtn);
+    aRoom   = std::make_unique<ButtonAttachment>  (proc.apvts, "roomLearn",   roomBtn);
 
-    setSize (660, 620);
+    setSize (660, 664);
+}
+
+void DeHowlEditor::timerCallback()
+{
+    if (! isShowing())
+        return;
+
+    const int ai   = proc.aiStatus.load();
+    const int cuts = proc.roomCuts.load();
+
+    juce::String s;
+    s << "AI: " << (ai == 1 ? "active" : ai == 2 ? "needs 48000 Hz sample rate!" : "off");
+    s << "    Room EQ: " << cuts << (cuts == 1 ? " cut" : " cuts");
+
+    if (s != statusLabel.getText())
+        statusLabel.setText (s, juce::dontSendNotification);
 }
 
 void DeHowlEditor::toggleDevicePanel()
@@ -306,7 +342,7 @@ void DeHowlEditor::paint (juce::Graphics& g)
     // footer credit
     g.setColour (kTextDim.withAlpha (0.8f));
     g.setFont (juce::Font (juce::FontOptions (11.5f)));
-    g.drawText (juce::String::fromUTF8 ("DeHowl v1.4  \xc2\xb7  created by Kwadwo Gyebi  \xc2\xb7  Shamaapps"),
+    g.drawText (juce::String::fromUTF8 ("DeHowl v2.1  \xc2\xb7  created by Kwadwo Gyebi  \xc2\xb7  Shamaapps"),
                 0, getHeight() - 22, getWidth(), 16, juce::Justification::centred);
 }
 
@@ -345,6 +381,16 @@ void DeHowlEditor::resized()
     clearBtn.setBounds (ctrlRow.removeFromLeft (130));
     ctrlRow.removeFromLeft (12);
     devicesBtn.setBounds (ctrlRow.removeFromLeft (130));
+
+    r.removeFromTop (8);
+    auto aiRow = r.removeFromTop (34);
+    aiBtn.setBounds    (aiRow.removeFromLeft (130));
+    aiRow.removeFromLeft (12);
+    roomBtn.setBounds  (aiRow.removeFromLeft (130));
+    aiRow.removeFromLeft (12);
+    resetBtn.setBounds (aiRow.removeFromLeft (130));
+    aiRow.removeFromLeft (12);
+    statusLabel.setBounds (aiRow);
 
     r.removeFromTop (12);
     r.removeFromBottom (18);   // footer credit (painted directly)
