@@ -29,6 +29,69 @@ namespace
     const juce::Colour kGood    (0xff3dd6a3);
 }
 
+
+static const char* kLegalText =
+"DeHowl  -  Live Feedback Suppressor\n"
+"Copyright (c) 2026 Shamaapps. Created by Kwadwo Gyebi. All rights reserved.\n"
+"\n"
+"LICENSE: Personal, non-exclusive license to install and use this software on\n"
+"devices you own or control. Redistribution or sale without written permission\n"
+"from Shamaapps is not permitted. Full EULA: see LICENSE.md in the project.\n"
+"\n"
+"PRIVACY: All audio is processed locally on this device. This software does\n"
+"not record audio, collect personal data, contain analytics or advertising,\n"
+"or transmit anything over the internet.\n"
+"\n"
+"NO WARRANTY: This software is provided \"AS IS\", without warranty of any\n"
+"kind, express or implied, including merchantability and fitness for a\n"
+"particular purpose. To the maximum extent permitted by law, Shamaapps shall\n"
+"not be liable for damages arising from use of this software, including\n"
+"damage to equipment, hearing injury, or event disruption.\n"
+"\n"
+"SOUND SAFETY: This software assists with, but does not replace, competent\n"
+"operation of a sound system. The operator remains responsible for safe\n"
+"sound levels at all times.\n"
+"\n"
+"=====================================================================\n"
+"THIRD-PARTY SOFTWARE NOTICES\n"
+"=====================================================================\n"
+"\n"
+"RNNoise (https://github.com/xiph/rnnoise) - BSD 3-Clause License\n"
+"\n"
+"Copyright (c) 2017, Mozilla\n"
+"Copyright (c) 2007-2017, Jean-Marc Valin\n"
+"Copyright (c) 2005-2017, Xiph.Org Foundation\n"
+"Copyright (c) 2003-2004, Mark Borgerding\n"
+"\n"
+"Redistribution and use in source and binary forms, with or without\n"
+"modification, are permitted provided that the following conditions are met:\n"
+"- Redistributions of source code must retain the above copyright notice,\n"
+"  this list of conditions and the following disclaimer.\n"
+"- Redistributions in binary form must reproduce the above copyright notice,\n"
+"  this list of conditions and the following disclaimer in the documentation\n"
+"  and/or other materials provided with the distribution.\n"
+"- Neither the name of the Xiph.Org Foundation nor the names of its\n"
+"  contributors may be used to endorse or promote products derived from this\n"
+"  software without specific prior written permission.\n"
+"\n"
+"THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS \"AS IS\"\n"
+"AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE\n"
+"IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE\n"
+"ARE DISCLAIMED. IN NO EVENT SHALL THE FOUNDATION OR CONTRIBUTORS BE LIABLE\n"
+"FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL\n"
+"DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR\n"
+"SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER\n"
+"CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT\n"
+"LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY\n"
+"OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH\n"
+"DAMAGE.\n"
+"\n"
+"---------------------------------------------------------------------\n"
+"JUCE Framework (https://juce.com)\n"
+"Used under the JUCE 8 End User License Agreement\n"
+"(https://juce.com/legal/juce-8-licence/). The JUCE splash screen is\n"
+"displayed in compliance with the free-tier license terms.\n";
+
 //==============================================================================
 DeHowlLookAndFeel::DeHowlLookAndFeel()
 {
@@ -186,6 +249,10 @@ DeHowlEditor::DeHowlEditor (DeHowlProcessor& p)
     setupRotary (depth, lDepth, "Max Depth");
     setupRotary (q,     lQ,     "Width (Q)");
     setupRotary (out,   lOut,   "Output");
+    setupRotary (lowCut,  lLowCut,  "Low Cut");
+    setupRotary (highCut, lHighCut, "High Cut");
+    lowCut.setTextValueSuffix (" Hz");
+    highCut.setTextValueSuffix (" Hz");
 
     mode.addItemList (juce::StringArray { "Latch", "Auto Release" }, 1);
     addAndMakeVisible (mode);
@@ -207,6 +274,20 @@ DeHowlEditor::DeHowlEditor (DeHowlProcessor& p)
 
     resetBtn.onClick = [this] { proc.requestResetLearning(); };
     addAndMakeVisible (resetBtn);
+
+    legalBtn.onClick = [this] { toggleLegalPanel(); };
+    addAndMakeVisible (legalBtn);
+
+    legalBox.setMultiLine (true);
+    legalBox.setReadOnly (true);
+    legalBox.setScrollbarsShown (true);
+    legalBox.setCaretVisible (false);
+    legalBox.setFont (juce::Font (juce::FontOptions (12.0f)));
+    legalBox.setColour (juce::TextEditor::backgroundColourId, kPanel);
+    legalBox.setColour (juce::TextEditor::textColourId, kText);
+    legalBox.setColour (juce::TextEditor::outlineColourId, kInset);
+    legalBox.setText (juce::String::fromUTF8 (kLegalText), false);
+    addChildComponent (legalBox);
 
     statusLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
     statusLabel.setColour (juce::Label::textColourId, kTextDim);
@@ -242,12 +323,14 @@ DeHowlEditor::DeHowlEditor (DeHowlProcessor& p)
     aDepth = std::make_unique<SliderAttachment>   (proc.apvts, "depth",       depth);
     aQ     = std::make_unique<SliderAttachment>   (proc.apvts, "q",           q);
     aOut   = std::make_unique<SliderAttachment>   (proc.apvts, "output",      out);
+    aLowCut  = std::make_unique<SliderAttachment>  (proc.apvts, "lowCut",      lowCut);
+    aHighCut = std::make_unique<SliderAttachment>  (proc.apvts, "highCut",     highCut);
     aMode  = std::make_unique<ComboBoxAttachment> (proc.apvts, "mode",        mode);
     aBypass = std::make_unique<ButtonAttachment>  (proc.apvts, "bypass",      bypassBtn);
     aAi     = std::make_unique<ButtonAttachment>  (proc.apvts, "aiClear",     aiBtn);
     aRoom   = std::make_unique<ButtonAttachment>  (proc.apvts, "roomLearn",   roomBtn);
 
-    setSize (660, 664);
+    setSize (800, 664);
 }
 
 void DeHowlEditor::timerCallback()
@@ -264,6 +347,24 @@ void DeHowlEditor::timerCallback()
 
     if (s != statusLabel.getText())
         statusLabel.setText (s, juce::dontSendNotification);
+}
+
+void DeHowlEditor::refreshPanels()
+{
+    panel.setVisible (! showingDevices && ! showingLegal);
+    deviceView.setVisible (showingDevices);
+    legalBox.setVisible (showingLegal);
+    devicesBtn.setButtonText (showingDevices ? "Back" : "Audio Devices");
+    legalBtn.setButtonText (showingLegal ? "Back" : "Legal");
+    resized();
+}
+
+void DeHowlEditor::toggleLegalPanel()
+{
+    showingLegal = ! showingLegal;
+    if (showingLegal)
+        showingDevices = false;
+    refreshPanels();
 }
 
 void DeHowlEditor::toggleDevicePanel()
@@ -287,10 +388,9 @@ void DeHowlEditor::toggleDevicePanel()
     }
 
     showingDevices = ! showingDevices;
-    deviceView.setVisible (showingDevices);
-    panel.setVisible (! showingDevices);
-    devicesBtn.setButtonText (showingDevices ? "Back" : "Audio Devices");
-    resized();
+    if (showingDevices)
+        showingLegal = false;
+    refreshPanels();
 }
 
 DeHowlEditor::~DeHowlEditor()
@@ -342,7 +442,7 @@ void DeHowlEditor::paint (juce::Graphics& g)
     // footer credit
     g.setColour (kTextDim.withAlpha (0.8f));
     g.setFont (juce::Font (juce::FontOptions (11.5f)));
-    g.drawText (juce::String::fromUTF8 ("DeHowl v2.0  \xc2\xb7  created by Kwadwo Gyebi  \xc2\xb7  Shamaapps"),
+    g.drawText (juce::String::fromUTF8 ("DeHowl v2.3  \xc2\xb7  created by Kwadwo Gyebi  \xc2\xb7  Shamaapps"),
                 0, getHeight() - 22, getWidth(), 16, juce::Justification::centred);
 }
 
@@ -358,7 +458,7 @@ void DeHowlEditor::resized()
     r.removeFromTop (12);
 
     auto knobRow = r.removeFromTop (132);
-    const int w = knobRow.getWidth() / 5;
+    const int w = knobRow.getWidth() / 7;
 
     auto place = [&] (juce::Slider& s, juce::Label& l)
     {
@@ -371,6 +471,8 @@ void DeHowlEditor::resized()
     place (depth, lDepth);
     place (q,     lQ);
     place (out,   lOut);
+    place (lowCut,  lLowCut);
+    place (highCut, lHighCut);
 
     r.removeFromTop (8);
     auto ctrlRow = r.removeFromTop (34);
@@ -381,6 +483,8 @@ void DeHowlEditor::resized()
     clearBtn.setBounds (ctrlRow.removeFromLeft (130));
     ctrlRow.removeFromLeft (12);
     devicesBtn.setBounds (ctrlRow.removeFromLeft (130));
+    ctrlRow.removeFromLeft (12);
+    legalBtn.setBounds (ctrlRow.removeFromLeft (90));
 
     r.removeFromTop (8);
     auto aiRow = r.removeFromTop (34);
@@ -396,6 +500,7 @@ void DeHowlEditor::resized()
     r.removeFromBottom (18);   // footer credit (painted directly)
     panel.setBounds (r);
     deviceView.setBounds (r);
+    legalBox.setBounds (r);
     if (deviceSelector != nullptr)
         deviceSelector->setSize (deviceView.getMaximumVisibleWidth(),
                                  juce::jmax (420, r.getHeight()));

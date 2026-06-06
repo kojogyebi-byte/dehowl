@@ -52,6 +52,8 @@ DeHowlProcessor::DeHowlProcessor()
     pBypass      = apvts.getRawParameterValue ("bypass");
     pAiClear     = apvts.getRawParameterValue ("aiClear");
     pRoomLearn   = apvts.getRawParameterValue ("roomLearn");
+    pLowCut      = apvts.getRawParameterValue ("lowCut");
+    pHighCut     = apvts.getRawParameterValue ("highCut");
 
     magDb.resize ((size_t) fftSize / 2 + 1, -120.0f);
     prefixSum.resize ((size_t) fftSize / 2 + 2, 0.0f);
@@ -77,7 +79,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout DeHowlProcessor::createLayou
 
     p.push_back (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { "q", 1 }, "Notch Width (Q)",
-        juce::NormalisableRange<float> (10.0f, 80.0f, 1.0f), 30.0f));
+        juce::NormalisableRange<float> (10.0f, 200.0f, 1.0f), 30.0f));
 
     p.push_back (std::make_unique<juce::AudioParameterChoice> (
         juce::ParameterID { "mode", 1 }, "Mode",
@@ -96,6 +98,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout DeHowlProcessor::createLayou
     p.push_back (std::make_unique<juce::AudioParameterBool> (
         juce::ParameterID { "roomLearn", 1 }, "Room Learning EQ", true));
 
+    p.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "lowCut", 1 }, "Low Cut (Hz)",
+        juce::NormalisableRange<float> (20.0f, 400.0f, 1.0f, 0.5f), 20.0f));
+
+    p.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "highCut", 1 }, "High Cut (Hz)",
+        juce::NormalisableRange<float> (2000.0f, 20000.0f, 10.0f, 0.5f), 20000.0f));
+
     return { p.begin(), p.end() };
 }
 
@@ -110,6 +120,9 @@ void DeHowlProcessor::prepareToPlay (double sampleRate, int)
     hopCount = 0;
     candidates.clear();
     clearAllNotches();
+
+    for (int ch = 0; ch < 2; ++ch) { hpFilt[ch].reset(); lpFilt[ch].reset(); }
+    curHpFreq = curLpFreq = -1.0f;   // force coefficient recompute
 
     // AI denoise: the RNNoise network is trained for 48 kHz audio
     rnSampleRateOk = std::abs (sr - 48000.0) < 1.0;
@@ -176,6 +189,47 @@ void DeHowlProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         if (inMag > outPeak.load())
             outPeak.store (inMag);
         return;
+    }
+
+    // ---- vocal band: low cut / high cut (runs BEFORE the detector, so
+    //      rumble and hiss are removed from both the sound and the analysis) ----
+    {
+        const float hpF = pLowCut->load();
+        const float lpF = pHighCut->load();
+
+        if (std::abs (hpF - curHpFreq) > 0.5f)
+        {
+            curHpFreq = hpF;
+            hpFilt[0].setHighPass (sr, (double) hpF);
+            hpFilt[1].setHighPass (sr, (double) hpF);
+        }
+        if (std::abs (lpF - curLpFreq) > 0.5f)
+        {
+            curLpFreq = lpF;
+            lpFilt[0].setLowPass (sr, (double) lpF);
+            lpFilt[1].setLowPass (sr, (double) lpF);
+        }
+
+        const bool useHp = curHpFreq > 24.0f;      // 20 Hz = knob fully down = off
+        const bool useLp = curLpFreq < 19000.0f;   // 20 kHz = knob fully up  = off
+        const int  vbChannels = juce::jmin (2, numIn);
+
+        if (useHp)
+            for (int ch = 0; ch < vbChannels; ++ch)
+            {
+                float* d = buffer.getWritePointer (ch);
+                auto&  f = hpFilt[ch];
+                for (int s = 0; s < numSamples; ++s)
+                    d[s] = f.processSample (d[s]);
+            }
+        if (useLp)
+            for (int ch = 0; ch < vbChannels; ++ch)
+            {
+                float* d = buffer.getWritePointer (ch);
+                auto&  f = lpFilt[ch];
+                for (int s = 0; s < numSamples; ++s)
+                    d[s] = f.processSample (d[s]);
+            }
     }
 
     // ---- feed the analyser with a mono mix ----
@@ -343,11 +397,11 @@ void DeHowlProcessor::analyse()
         if (! (v > magDb[(size_t) (b - 1)] && v >= magDb[(size_t) (b + 1)]))
             continue;   // must be a local maximum
 
-        // Average of the surrounding spectrum (±48 bins, excluding ±3) via prefix sums
-        const int lo  = juce::jmax (1, b - 48);
-        const int hi  = juce::jmin (numBins - 1, b + 48);
-        const int elo = juce::jmax (lo, b - 3);
-        const int ehi = juce::jmin (hi, b + 3);
+        // Average of the surrounding spectrum (±64 bins, excluding ±4) via prefix sums
+        const int lo  = juce::jmax (1, b - 64);
+        const int hi  = juce::jmin (numBins - 1, b + 64);
+        const int elo = juce::jmax (lo, b - 4);
+        const int ehi = juce::jmin (hi, b + 4);
 
         const float sum = (prefixSum[(size_t) hi + 1] - prefixSum[(size_t) lo])
                         - (prefixSum[(size_t) ehi + 1] - prefixSum[(size_t) elo]);
@@ -406,10 +460,10 @@ void DeHowlProcessor::updateRoomLearning()
         if (! (v > roomAvgDb[(size_t) (b - 1)] && v >= roomAvgDb[(size_t) (b + 1)]))
             continue;
 
-        const int lo  = juce::jmax (1, b - 64);
-        const int hi  = juce::jmin (numBins - 1, b + 64);
-        const int elo = juce::jmax (lo, b - 8);
-        const int ehi = juce::jmin (hi, b + 8);
+        const int lo  = juce::jmax (1, b - 128);
+        const int hi  = juce::jmin (numBins - 1, b + 128);
+        const int elo = juce::jmax (lo, b - 16);
+        const int ehi = juce::jmin (hi, b + 16);
         const float sum = (roomPrefix[(size_t) hi + 1] - roomPrefix[(size_t) lo])
                         - (roomPrefix[(size_t) ehi + 1] - roomPrefix[(size_t) elo]);
         const int   cnt = (hi - lo + 1) - (ehi - elo + 1);
@@ -526,7 +580,7 @@ void DeHowlProcessor::registerCandidate (int bin, float levelDb)
 {
     for (auto& c : candidates)
     {
-        if (std::abs (c.bin - bin) <= 3)
+        if (std::abs (c.bin - bin) <= 4)
         {
             c.bin    = bin;
             c.lastDb = levelDb;
@@ -548,11 +602,11 @@ bool DeHowlProcessor::hasStrongHarmonics (int bin) const
     for (int h = 2; h <= 3; ++h)
     {
         const int hb = h * bin;
-        if (hb >= numBins - 3)
+        if (hb >= numBins - 6)
             break;
 
         float best = -120.0f;
-        for (int k = -3; k <= 3; ++k)
+        for (int k = -6; k <= 6; ++k)
             best = juce::jmax (best, magDb[(size_t) (hb + k)]);
 
         if (best > fundDb - 18.0f)
@@ -610,13 +664,22 @@ void DeHowlProcessor::triggerNotch (float f)
 {
     const float maxDepth = pDepth->load();
 
-    // Already covering this frequency? (within 1/12 octave) -> bite deeper
+    // Already covering this frequency? (within 1/12 octave) -> bite deeper,
+    // and refine the notch centre onto the freshly measured frequency
     for (auto& n : notches)
     {
         if (n.active && std::abs (std::log2 (f / n.freqHz)) < (1.0f / 12.0f))
         {
+            n.freqHz += 0.35f * (f - n.freqHz);      // glide onto the true centre
             n.targetDepth        = juce::jmin (maxDepth, n.targetDepth + 4.0f);
             n.framesSinceTrigger = 0;
+
+            if (n.currentDepth > 0.3f)               // re-centre the live filters now
+            {
+                const double Q = (double) pQ->load();
+                n.filt[0].setPeak (sr, (double) n.freqHz, Q, (double) -n.currentDepth);
+                n.filt[1].setPeak (sr, (double) n.freqHz, Q, (double) -n.currentDepth);
+            }
             return;
         }
     }
