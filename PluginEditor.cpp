@@ -186,6 +186,10 @@ DeHowlEditor::DeHowlEditor (DeHowlProcessor& p)
     setupRotary (depth, lDepth, "Max Depth");
     setupRotary (q,     lQ,     "Width (Q)");
     setupRotary (out,   lOut,   "Output");
+    setupRotary (lowCut,  lLowCut,  "Low Cut");
+    setupRotary (highCut, lHighCut, "High Cut");
+    lowCut.setTextValueSuffix (" Hz");
+    highCut.setTextValueSuffix (" Hz");
 
     mode.addItemList (juce::StringArray { "Latch", "Auto Release" }, 1);
     addAndMakeVisible (mode);
@@ -242,12 +246,14 @@ DeHowlEditor::DeHowlEditor (DeHowlProcessor& p)
     aDepth = std::make_unique<SliderAttachment>   (proc.apvts, "depth",       depth);
     aQ     = std::make_unique<SliderAttachment>   (proc.apvts, "q",           q);
     aOut   = std::make_unique<SliderAttachment>   (proc.apvts, "output",      out);
+    aLowCut  = std::make_unique<SliderAttachment>  (proc.apvts, "lowCut",      lowCut);
+    aHighCut = std::make_unique<SliderAttachment>  (proc.apvts, "highCut",     highCut);
     aMode  = std::make_unique<ComboBoxAttachment> (proc.apvts, "mode",        mode);
     aBypass = std::make_unique<ButtonAttachment>  (proc.apvts, "bypass",      bypassBtn);
     aAi     = std::make_unique<ButtonAttachment>  (proc.apvts, "aiClear",     aiBtn);
     aRoom   = std::make_unique<ButtonAttachment>  (proc.apvts, "roomLearn",   roomBtn);
 
-    setSize (660, 664);
+    setSize (800, 664);
 }
 
 void DeHowlEditor::timerCallback()
@@ -342,7 +348,7 @@ void DeHowlEditor::paint (juce::Graphics& g)
     // footer credit
     g.setColour (kTextDim.withAlpha (0.8f));
     g.setFont (juce::Font (juce::FontOptions (11.5f)));
-    g.drawText (juce::String::fromUTF8 ("DeHowl v2.1  \xc2\xb7  created by Kwadwo Gyebi  \xc2\xb7  Shamaapps"),
+    g.drawText (juce::String::fromUTF8 ("DeHowl v2.2  \xc2\xb7  created by Kwadwo Gyebi  \xc2\xb7  Shamaapps"),
                 0, getHeight() - 22, getWidth(), 16, juce::Justification::centred);
 }
 
@@ -358,7 +364,7 @@ void DeHowlEditor::resized()
     r.removeFromTop (12);
 
     auto knobRow = r.removeFromTop (132);
-    const int w = knobRow.getWidth() / 5;
+    const int w = knobRow.getWidth() / 7;
 
     auto place = [&] (juce::Slider& s, juce::Label& l)
     {
@@ -371,6 +377,8 @@ void DeHowlEditor::resized()
     place (depth, lDepth);
     place (q,     lQ);
     place (out,   lOut);
+    place (lowCut,  lLowCut);
+    place (highCut, lHighCut);
 
     r.removeFromTop (8);
     auto ctrlRow = r.removeFromTop (34);
