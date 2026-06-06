@@ -54,6 +54,8 @@ DeHowlProcessor::DeHowlProcessor()
     pRoomLearn   = apvts.getRawParameterValue ("roomLearn");
     pLowCut      = apvts.getRawParameterValue ("lowCut");
     pHighCut     = apvts.getRawParameterValue ("highCut");
+    pLowCutOn    = apvts.getRawParameterValue ("lowCutOn");
+    pHighCutOn   = apvts.getRawParameterValue ("highCutOn");
 
     magDb.resize ((size_t) fftSize / 2 + 1, -120.0f);
     prefixSum.resize ((size_t) fftSize / 2 + 2, 0.0f);
@@ -100,11 +102,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout DeHowlProcessor::createLayou
 
     p.push_back (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { "lowCut", 1 }, "Low Cut (Hz)",
-        juce::NormalisableRange<float> (20.0f, 400.0f, 1.0f, 0.5f), 20.0f));
+        juce::NormalisableRange<float> (20.0f, 400.0f, 1.0f, 0.5f), 120.0f));
 
     p.push_back (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { "highCut", 1 }, "High Cut (Hz)",
-        juce::NormalisableRange<float> (2000.0f, 20000.0f, 10.0f, 0.5f), 20000.0f));
+        juce::NormalisableRange<float> (2000.0f, 20000.0f, 10.0f, 0.5f), 9000.0f));
+
+    p.push_back (std::make_unique<juce::AudioParameterBool> (
+        juce::ParameterID { "lowCutOn", 1 }, "Low Cut On", false));
+
+    p.push_back (std::make_unique<juce::AudioParameterBool> (
+        juce::ParameterID { "highCutOn", 1 }, "High Cut On", false));
 
     return { p.begin(), p.end() };
 }
@@ -210,8 +218,8 @@ void DeHowlProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
             lpFilt[1].setLowPass (sr, (double) lpF);
         }
 
-        const bool useHp = curHpFreq > 24.0f;      // 20 Hz = knob fully down = off
-        const bool useLp = curLpFreq < 19000.0f;   // 20 kHz = knob fully up  = off
+        const bool useHp = pLowCutOn->load()  > 0.5f;   // toggled by clicking the knob name
+        const bool useLp = pHighCutOn->load() > 0.5f;
         const int  vbChannels = juce::jmin (2, numIn);
 
         if (useHp)

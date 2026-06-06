@@ -239,6 +239,8 @@ private:
     std::atomic<float>* pRoomLearn   = nullptr;
     std::atomic<float>* pLowCut      = nullptr;
     std::atomic<float>* pHighCut     = nullptr;
+    std::atomic<float>* pLowCutOn    = nullptr;
+    std::atomic<float>* pHighCutOn   = nullptr;
 
     //==============================================================================
     void analyse();
