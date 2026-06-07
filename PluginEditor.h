@@ -116,6 +116,10 @@ private:
     juce::TextButton aiBtn      { "AI Clear Voice" };
     juce::TextButton roomBtn    { "Room Learn EQ" };
     juce::TextButton resetBtn   { "Reset Learning" };
+    juce::TextButton afcBtn      { "AFC Predict" };
+    juce::TextButton afcResetBtn { "Reset Model" };
+    juce::Slider     afcShift;
+    juce::Label      afcStatusLabel;
     juce::Label statusLabel;
     SystemCpu sysCpu;
     juce::TextEditor legalBox;
@@ -133,9 +137,9 @@ private:
     using SliderAttachment   = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ComboBoxAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     using ButtonAttachment   = juce::AudioProcessorValueTreeState::ButtonAttachment;
-    std::unique_ptr<SliderAttachment>   aSens, aMaxN, aDepth, aQ, aOut, aLowCut, aHighCut;
+    std::unique_ptr<SliderAttachment>   aSens, aMaxN, aDepth, aQ, aOut, aLowCut, aHighCut, aAfcShift;
     std::unique_ptr<ComboBoxAttachment> aMode;
-    std::unique_ptr<ButtonAttachment>   aBypass, aAi, aRoom, aLowCutOn, aHighCutOn;
+    std::unique_ptr<ButtonAttachment>   aBypass, aAi, aRoom, aLowCutOn, aHighCutOn, aAfc;
 
     void setupRotary (juce::Slider&, juce::Label&, const juce::String& name);
 

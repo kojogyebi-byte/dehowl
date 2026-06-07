@@ -56,6 +56,8 @@ DeHowlProcessor::DeHowlProcessor()
     pHighCut     = apvts.getRawParameterValue ("highCut");
     pLowCutOn    = apvts.getRawParameterValue ("lowCutOn");
     pHighCutOn   = apvts.getRawParameterValue ("highCutOn");
+    pAfc         = apvts.getRawParameterValue ("afc");
+    pAfcShift    = apvts.getRawParameterValue ("afcShift");
 
     magDb.resize ((size_t) fftSize / 2 + 1, -120.0f);
     prefixSum.resize ((size_t) fftSize / 2 + 2, 0.0f);
@@ -114,6 +116,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout DeHowlProcessor::createLayou
     p.push_back (std::make_unique<juce::AudioParameterBool> (
         juce::ParameterID { "highCutOn", 1 }, "High Cut On", false));
 
+    p.push_back (std::make_unique<juce::AudioParameterBool> (
+        juce::ParameterID { "afc", 1 }, "AFC Predict", false));
+
+    p.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "afcShift", 1 }, "AFC Shift (Hz)",
+        juce::NormalisableRange<float> (1.0f, 12.0f, 0.5f), 5.0f));
+
     return { p.begin(), p.end() };
 }
 
@@ -135,6 +144,16 @@ void DeHowlProcessor::prepareToPlay (double sampleRate, int)
     // AI denoise: the RNNoise network is trained for 48 kHz audio
     rnSampleRateOk = std::abs (sr - 48000.0) < 1.0;
     createRnStates();
+
+    // AFC: fresh room model + shifter state at every (re)start
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        afc[ch].prepare();
+        shifter[ch].prepare (sr);
+    }
+    prevAfcOn = false;
+    afcState.store (0);
+    afcErle.store (0.0f);
 
     resetLearning();
     publishDisplay();
@@ -176,6 +195,11 @@ void DeHowlProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     }
     if (resetLearnRequest.exchange (false))
         resetLearning();
+    if (resetAfcRequest.exchange (false))
+    {
+        afc[0].resetModel();
+        afc[1].resetModel();
+    }
 
     const int numIn  = getTotalNumInputChannels();
     const int numOut = getTotalNumOutputChannels();
@@ -197,6 +221,34 @@ void DeHowlProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         if (inMag > outPeak.load())
             outPeak.store (inMag);
         return;
+    }
+
+    // ---- AFC: subtract the PREDICTED feedback from the raw mic signal ----
+    // This runs first, on the untouched input: the model maps "what the
+    // speakers played" to "what arrives back at the mic", so it must see the
+    // mic signal exactly as received. Everything downstream (detector, notch
+    // bank, AI) then works on the pre-cleaned signal — fewer false notches.
+    const bool afcOn = pAfc->load() > 0.5f;
+    const int  afcChannels = juce::jmin (2, numIn);
+
+    if (afcOn && ! prevAfcOn)            // switched on: drop any stale state
+    {
+        afc[0].resetModel();
+        afc[1].resetModel();
+        shifter[0].reset();
+        shifter[1].reset();
+    }
+    prevAfcOn = afcOn;
+
+    if (afcOn)
+    {
+        for (int ch = 0; ch < afcChannels; ++ch)
+        {
+            float* d = buffer.getWritePointer (ch);
+            auto&  a = afc[ch];
+            for (int s = 0; s < numSamples; ++s)
+                d[s] = a.cancel (d[s]);
+        }
     }
 
     // ---- vocal band: low cut / high cut (runs BEFORE the detector, so
@@ -338,7 +390,48 @@ void DeHowlProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         aiStatus.store (0);
     }
 
+    // ---- AFC frequency shifter: the decorrelator (and a feedback breaker
+    //      in its own right). Last processing step before the output gain,
+    //      so everything the speakers receive is shifted. ----
+    if (afcOn)
+    {
+        shifter[0].setShiftHz ((double) pAfcShift->load());
+        shifter[1].setShiftHz ((double) pAfcShift->load());
+
+        for (int ch = 0; ch < afcChannels; ++ch)
+        {
+            float* d = buffer.getWritePointer (ch);
+            auto&  sh = shifter[ch];
+            for (int s = 0; s < numSamples; ++s)
+                d[s] = sh.process (d[s]);
+        }
+    }
+
     buffer.applyGain (juce::Decibels::decibelsToGain (pOutput->load()));
+
+    // ---- AFC reference capture: the model must see EXACTLY the speaker
+    //      feed, so this is the final post-gain signal. ----
+    if (afcOn)
+    {
+        for (int ch = 0; ch < afcChannels; ++ch)
+        {
+            const float* d = buffer.getReadPointer (ch);
+            auto&        a = afc[ch];
+            for (int s = 0; s < numSamples; ++s)
+                a.pushReference (d[s]);
+        }
+
+        const float erle = afcChannels > 1
+            ? 0.5f * (afc[0].getErleDb() + afc[1].getErleDb())
+            : afc[0].getErleDb();
+        afcErle.store (erle);
+        afcState.store (erle >= 3.0f ? 2 : 1);
+    }
+    else
+    {
+        afcState.store (0);
+        afcErle.store (0.0f);
+    }
 
     const float mag = buffer.getMagnitude (0, numSamples);
     if (mag > outPeak.load())

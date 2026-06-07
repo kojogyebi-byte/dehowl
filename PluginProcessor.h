@@ -7,6 +7,8 @@
 #include <vector>
 #include <cmath>
 
+#include "Afc.h"
+
 struct DenoiseState;   // RNNoise neural network state (defined in rnnoise.h)
 
 //==============================================================================
@@ -126,10 +128,15 @@ public:
     // Called from the editor ("Clear Notches" button) — real-time safe
     void requestClearNotches() noexcept { clearRequest.store (true); }
     void requestResetLearning() noexcept { resetLearnRequest.store (true); }
+    void requestResetAfc() noexcept { resetAfcRequest.store (true); }
 
     // Status for the GUI: 0 = AI off, 1 = AI active, 2 = AI needs 48000 Hz
     std::atomic<int> aiStatus  { 0 };
     std::atomic<int> roomCuts  { 0 };   // how many learned room-EQ cuts are active
+
+    // AFC status for the GUI: 0 = off, 1 = learning, 2 = cancelling
+    std::atomic<int>   afcState { 0 };
+    std::atomic<float> afcErle  { 0.0f };   // dB of feedback being removed
 
     // Lock-free snapshot of the notch bank, read by the editor at ~10 Hz
     std::array<std::atomic<float>, kMaxNotches> displayFreq  {};
@@ -227,6 +234,16 @@ private:
     void updateTones();               // ramp depths, refresh coefficients
     void resetLearning();
 
+    //==============================================================================
+    // AFC — predictive feedback cancellation (see Afc.h for the full story).
+    // One NLMS model + one frequency shifter per channel. The shifter is part
+    // of the AFC system: it decorrelates the loop so the model learns the
+    // ROOM, not the programme.
+    AfcChannel  afc[2];
+    FreqShifter shifter[2];
+    bool prevAfcOn = false;            // detect off->on to clear stale state
+    std::atomic<bool> resetAfcRequest { false };
+
     // Cached raw parameter pointers
     std::atomic<float>* pSensitivity = nullptr;
     std::atomic<float>* pMaxNotches  = nullptr;
@@ -241,6 +258,8 @@ private:
     std::atomic<float>* pHighCut     = nullptr;
     std::atomic<float>* pLowCutOn    = nullptr;
     std::atomic<float>* pHighCutOn   = nullptr;
+    std::atomic<float>* pAfc         = nullptr;
+    std::atomic<float>* pAfcShift    = nullptr;
 
     //==============================================================================
     void analyse();

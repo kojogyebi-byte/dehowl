@@ -291,6 +291,26 @@ DeHowlEditor::DeHowlEditor (DeHowlProcessor& p)
     resetBtn.onClick = [this] { proc.requestResetLearning(); };
     addAndMakeVisible (resetBtn);
 
+    // ---- AFC row: predictive cancellation ----
+    afcBtn.setClickingTogglesState (true);
+    afcBtn.setColour (juce::TextButton::buttonOnColourId, kGood.withAlpha (0.85f));
+    afcBtn.setColour (juce::TextButton::textColourOnId, juce::Colours::black);
+    afcBtn.setTooltip ("Predictive feedback cancellation: models the speaker-to-mic "
+                       "path and subtracts the feedback before it can loop.");
+    addAndMakeVisible (afcBtn);
+
+    afcResetBtn.onClick = [this] { proc.requestResetAfc(); };
+    addAndMakeVisible (afcResetBtn);
+
+    afcShift.setSliderStyle (juce::Slider::LinearHorizontal);
+    afcShift.setTextBoxStyle (juce::Slider::TextBoxRight, false, 64, 18);
+    afcShift.setTextValueSuffix (" Hz");
+    addAndMakeVisible (afcShift);
+
+    afcStatusLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
+    afcStatusLabel.setColour (juce::Label::textColourId, kTextDim);
+    addAndMakeVisible (afcStatusLabel);
+
     legalBox.setMultiLine (true);
     legalBox.setReadOnly (true);
     legalBox.setScrollbarsShown (true);
@@ -344,8 +364,10 @@ DeHowlEditor::DeHowlEditor (DeHowlProcessor& p)
     aBypass = std::make_unique<ButtonAttachment>  (proc.apvts, "bypass",      bypassBtn);
     aAi     = std::make_unique<ButtonAttachment>  (proc.apvts, "aiClear",     aiBtn);
     aRoom   = std::make_unique<ButtonAttachment>  (proc.apvts, "roomLearn",   roomBtn);
+    aAfc      = std::make_unique<ButtonAttachment> (proc.apvts, "afc",        afcBtn);
+    aAfcShift = std::make_unique<SliderAttachment> (proc.apvts, "afcShift",   afcShift);
 
-    setSize (800, 664);
+    setSize (800, 706);
 }
 
 void DeHowlEditor::timerCallback()
@@ -367,6 +389,19 @@ void DeHowlEditor::timerCallback()
     if (s != statusLabel.getText())
         statusLabel.setText (s, juce::dontSendNotification);
 
+    // AFC: model state + how much feedback it is removing right now
+    const int   afcSt = proc.afcState.load();
+    const float erle  = proc.afcErle.load();
+    juce::String a;
+    if (afcSt == 0)       a = "AFC: off";
+    else if (afcSt == 1)  a = "AFC: learning the room...";
+    else                  a = "AFC: cancelling  " + juce::String (erle, 1) + " dB";
+    if (a != afcStatusLabel.getText())
+        afcStatusLabel.setText (a, juce::dontSendNotification);
+    afcStatusLabel.setColour (juce::Label::textColourId,
+                              afcSt == 2 ? kGood : kTextDim);
+
+    afcShift.setAlpha (afcBtn.getToggleState() ? 1.0f : 0.45f);
     lowCut .setAlpha (lowCutTgl .getToggleState() ? 1.0f : 0.45f);
     highCut.setAlpha (highCutTgl.getToggleState() ? 1.0f : 0.45f);
 }
@@ -464,7 +499,7 @@ void DeHowlEditor::paint (juce::Graphics& g)
 
     g.setColour (kTextDim);
     g.setFont (juce::Font (juce::FontOptions (12.5f)));
-    g.drawText ("Live Feedback Suppressor  |  zero latency", 60, 34, 320, 16,
+    g.drawText ("Live Feedback Suppressor  |  predictive AFC + adaptive notches", 60, 34, 420, 16,
                 juce::Justification::left);
 
     // footer credit
@@ -472,7 +507,7 @@ void DeHowlEditor::paint (juce::Graphics& g)
     g.setFont (juce::Font (juce::FontOptions (11.5f)));
     const auto footer = showingLegal
         ? juce::String ("Legal & Licenses  -  click here to close")
-        : juce::String::fromUTF8 ("DeHowl v2.6  \xc2\xb7  built " __DATE__ "  \xc2\xb7  Kwadwo Gyebi  \xc2\xb7  Shamaapps  \xc2\xb7  Legal");
+        : juce::String::fromUTF8 ("DeHowl v3.0  \xc2\xb7  built " __DATE__ "  \xc2\xb7  Kwadwo Gyebi  \xc2\xb7  Shamaapps  \xc2\xb7  Legal");
     g.drawText (footer, 0, getHeight() - 22, getWidth(), 16, juce::Justification::centred);
 }
 
@@ -529,6 +564,16 @@ void DeHowlEditor::resized()
     resetBtn.setBounds (aiRow.removeFromLeft (130));
     aiRow.removeFromLeft (12);
     statusLabel.setBounds (aiRow);
+
+    r.removeFromTop (8);
+    auto afcRow = r.removeFromTop (34);
+    afcBtn.setBounds      (afcRow.removeFromLeft (130));
+    afcRow.removeFromLeft (12);
+    afcResetBtn.setBounds (afcRow.removeFromLeft (130));
+    afcRow.removeFromLeft (12);
+    afcShift.setBounds    (afcRow.removeFromLeft (210));
+    afcRow.removeFromLeft (12);
+    afcStatusLabel.setBounds (afcRow);
 
     r.removeFromTop (12);
     r.removeFromBottom (18);   // footer credit (painted directly)
