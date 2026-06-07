@@ -472,7 +472,7 @@ void DeHowlEditor::paint (juce::Graphics& g)
     g.setFont (juce::Font (juce::FontOptions (11.5f)));
     const auto footer = showingLegal
         ? juce::String ("Legal & Licenses  -  click here to close")
-        : juce::String::fromUTF8 ("DeHowl v2.5  \xc2\xb7  created by Kwadwo Gyebi  \xc2\xb7  Shamaapps  \xc2\xb7  Legal");
+        : juce::String::fromUTF8 ("DeHowl v2.6  \xc2\xb7  built " __DATE__ "  \xc2\xb7  Kwadwo Gyebi  \xc2\xb7  Shamaapps  \xc2\xb7  Legal");
     g.drawText (footer, 0, getHeight() - 22, getWidth(), 16, juce::Justification::centred);
 }
 
