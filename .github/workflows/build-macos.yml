@@ -29,5 +29,5 @@ jobs:
       - name: Upload the finished app
         uses: actions/upload-artifact@v4
         with:
-          name: DeHowl-macOS
+          name: DeHowl-macOS-build-${{ github.run_number }}
           path: DeHowl-macOS.zip
