@@ -357,8 +357,12 @@ void DeHowlEditor::timerCallback()
     const int cuts = proc.roomCuts.load();
 
     juce::String s;
-    s << "AI: " << (ai == 1 ? "active" : ai == 2 ? "needs 48000 Hz sample rate!" : "off");
-    s << "    Room EQ: " << cuts << (cuts == 1 ? " cut" : " cuts");
+    s << "AI: " << (ai == 1 ? "active" : ai == 2 ? "needs 48000 Hz!" : "off");
+    s << "   Room EQ: " << cuts << (cuts == 1 ? " cut" : " cuts");
+
+    s << "   CPU " << juce::String (sysCpu.getPercent(), 0) << "%";
+    if (auto* dm = getStandaloneDeviceManager())
+        s << "   DSP " << juce::String (dm->getCpuUsage() * 100.0, 0) << "%";
 
     if (s != statusLabel.getText())
         statusLabel.setText (s, juce::dontSendNotification);
@@ -468,7 +472,7 @@ void DeHowlEditor::paint (juce::Graphics& g)
     g.setFont (juce::Font (juce::FontOptions (11.5f)));
     const auto footer = showingLegal
         ? juce::String ("Legal & Licenses  -  click here to close")
-        : juce::String::fromUTF8 ("DeHowl v2.4  \xc2\xb7  created by Kwadwo Gyebi  \xc2\xb7  Shamaapps  \xc2\xb7  Legal");
+        : juce::String::fromUTF8 ("DeHowl v2.5  \xc2\xb7  created by Kwadwo Gyebi  \xc2\xb7  Shamaapps  \xc2\xb7  Legal");
     g.drawText (footer, 0, getHeight() - 22, getWidth(), 16, juce::Justification::centred);
 }
 

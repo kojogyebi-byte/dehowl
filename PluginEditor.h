@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PluginProcessor.h"
+#include "SystemCpu.h"
 
 //==============================================================================
 // DeHowl visual style: dark panel, red accent, clean arc knobs
@@ -116,6 +117,7 @@ private:
     juce::TextButton roomBtn    { "Room Learn EQ" };
     juce::TextButton resetBtn   { "Reset Learning" };
     juce::Label statusLabel;
+    SystemCpu sysCpu;
     juce::TextEditor legalBox;
     bool showingLegal = false;
     void toggleLegalPanel();
